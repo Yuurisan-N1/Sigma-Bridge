@@ -41,7 +41,7 @@ Content-Type: application/json
 
 The response parser accepts an access token named `access_token` or `accessToken`, at the top level or inside `data`. It accepts a replacement refresh token named `refresh_token` or `refreshToken`, with the same wrapper handling. If the response does not include a replacement refresh token, the bridge keeps the submitted refresh token. A replacement token is written back to the corresponding line in `data.txt`.
 
-The access-token JWT payload is decoded to find the user ID. The code checks claims in this order: `sub_user_id`, `user_uuid`, `sub`, then `user_id`. Expiration is read from the JWT `exp` claim. If that claim is missing or unreadable, the local fallback is one hour. A refreshed session is treated as usable until two minutes before its expiration. The claim-reading helper decodes the JWT payload but does not verify its signature.
+The access-token JWT payload is decoded to find the user ID. The code checks claims in this order: `sub_user_id`, `user_uuid`, `sub`, then `user_id`. Expiration is read from the JWT `exp` claim. If that claim is missing or unreadable, the local fallback is one hour. A session is treated as fresh only while more than ten minutes remain before its expiration. The claim-reading helper decodes the JWT payload but does not verify its signature.
 
 If `SIGMA_ACCESS` is set, the server uses that single access token instead of loading refresh tokens from `data.txt`. The code still needs to read the user ID from that token's payload. It uses the same one-hour fallback if `exp` is unavailable.
 
@@ -137,16 +137,16 @@ Unknown events are also treated as refusals if they have a string `message` fiel
 
 ## Account profile and quota
 
-After a turn completes and a thread cleanup request is sent, the bridge calls:
+The main OpenAI route fetches the profile before each account attempt to check its quota. It fetches the profile again after a completed turn to update the account's exhausted state. The CLI also fetches it in its account and token probes.
 
 ```http
 GET /account/profile
 Authorization: Bearer <access token>
 ```
 
-The profile parser reads top-level `user_id`, `subscription.plan_name`, and top-level fields whose names end with `_limit`. For each limit, it reads `current` and `remaining`, defaulting missing numeric values to zero. The parser requires `user_id` and `hermes_limit`. If the plan name is missing, the local value is `free`. This parser does not unwrap a `data` wrapper.
+The profile parser reads top-level `user_id`, `subscription.plan_name`, and top-level fields whose names end with `_limit`. For each limit, it reads `current` and `remaining`, defaulting missing numeric values to zero. The parser also reads top-level `email` and `username` strings, trimming surrounding whitespace. Its account label prefers `email`, then `username`, then a masked user ID. When no profile label is available, the session label is taken from JWT claims in this order: `email`, `username`, `name`, `preferred_username`, then `nickname`; if none is present, it uses a masked user ID. The parser requires `user_id` and `hermes_limit`. If the plan name is missing, the local value is `free`. This parser does not unwrap a `data` wrapper.
 
-The server route uses `hermes_limit.remaining` to mark an account exhausted if the value is zero. Errors while fetching the profile after a completed turn are ignored by the route, so an error from this call alone does not mark the account exhausted.
+If the pre-turn profile request succeeds and `hermes_limit.remaining` is zero, the route marks that account exhausted and may rotate to another account. If the pre-turn profile request fails, the route ignores the error and proceeds with the account. After a completed turn, profile-fetch errors are also ignored, so an error from that call alone does not mark the account exhausted. The route makes at most three account attempts; refresh or turn errors put the account on a 120-second cooldown.
 
 ## Thread cleanup
 
@@ -159,8 +159,37 @@ Authorization: Bearer <access token>
 
 This request is made after the turn completes successfully. Cleanup failure is logged and does not change a completed answer into an error. The deleted count is read from `deleted`, `Deleted`, `count`, or `threads`, including when the field is inside `data`, or from a message containing a number after the word `deleted`. If no count is found, the value is treated as zero.
 
+## User-card memory cleanup
+
+After thread cleanup, the main OpenAI route sends a user-card cleanup request. The direct-token CLI probe and chat paths also send it after their thread cleanup request. The request is:
+
+```http
+DELETE /user-card
+Authorization: Bearer <access token>
+Content-Type: application/json
+```
+
+```json
+{
+  "fields": [
+    "name",
+    "preferred_language",
+    "profession",
+    "interests",
+    "current_projects",
+    "long_term_goals",
+    "response_style",
+    "response_format",
+    "tone",
+    "facts"
+  ]
+}
+```
+
+The source considers the card cleared if the top-level `status` is `success` or `ok` (case-insensitive), if the first present top-level boolean among `deleted`, `cleared`, and `removed` is `true`, or if a top-level `message` field exists. It does not unwrap a `data` wrapper. Request failures are logged and do not turn a completed answer into an error; the route reports a failed or unrecognized cleanup as `kept`.
+
 ## Implementation limits
 
 The upstream paths and payload details above are limited to what this source creates and reads. They do not imply support for other Sigma endpoints, payload fields, authentication schemes, or response formats. The client-facing routes provided by the bridge remain those listed in [API.md](../docs/API.md).
 
-Implementation references: `src/support/consts.rs`, `src/net/client.rs`, `src/thread/ledger.rs`, `src/proof/challenge.rs`, `src/proof/solve.rs`, `src/proof/redeem.rs`, `src/proof/vault.rs`, `src/socket/client.rs`, `src/socket/search.rs`, `src/socket/follow.rs`, `src/socket/summary.rs`, `src/quota/profile.rs`, and `src/openai/route.rs`.
+Implementation references: `src/support/consts.rs`, `src/net/client.rs`, `src/thread/ledger.rs`, `src/thread/memory.rs`, `src/thread/sweep.rs`, `src/proof/challenge.rs`, `src/proof/solve.rs`, `src/proof/redeem.rs`, `src/proof/vault.rs`, `src/socket/client.rs`, `src/socket/search.rs`, `src/socket/follow.rs`, `src/socket/summary.rs`, `src/quota/profile.rs`, `src/quota/guard.rs`, `src/openai/route.rs`, and `src/cli/probe.rs`.

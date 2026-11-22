@@ -395,7 +395,8 @@ Sigma-Bridge/
 │   ├── thread/
 │   │   ├── ledger.rs                    # Session ledger: token load, resolve, and refresh
 │   │   ├── mod.rs
-│   │   └── sweep.rs                     # Thread purge after each completed request
+│   │   ├── sweep.rs                     # Thread purge after each completed request
+│   │   └── memory.rs                    # User-card memory cleanup
 │   └── main.rs                          # Entry point, Ctrl+C handler, mode dispatch
 ├── upstream/
 │   └── UPSTREAM.md                      # Notes on the upstream service
