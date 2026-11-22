@@ -22,6 +22,20 @@ pub const POW_REDEEM: &str = "/security/pow/redeem";
 pub const PROFILE: &str = "/account/profile";
 pub const TOKEN_REFRESH: &str = "/account/token/refresh";
 pub const THREAD_PURGE: &str = "/account/thread/delete";
+pub const USER_CARD: &str = "/user-card";
+
+pub const CARD_FIELDS: [&str; 10] = [
+    "name",
+    "preferred_language",
+    "profession",
+    "interests",
+    "current_projects",
+    "long_term_goals",
+    "response_style",
+    "response_format",
+    "tone",
+    "facts",
+];
 
 pub const POW_ACTION: &str = "chat";
 pub const POW_SESSION_SECS: u64 = 3600;
@@ -46,6 +60,8 @@ pub const SOCKET_OPEN_SECS: u64 = 30;
 
 pub const POW_ATTEMPTS: u32 = 3;
 pub const POW_RETRY_MILLIS: u64 = 1500;
+
+pub const SESSION_EARLY_SECS: i64 = 600;
 
 pub const LEDGER_ATTEMPTS: u32 = 3;
 pub const LEDGER_RETRY_MILLIS: u64 = 1000;

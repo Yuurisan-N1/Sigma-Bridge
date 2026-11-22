@@ -16,8 +16,12 @@ use crate::socket::{follow, search};
 use crate::support::cfg::Setup;
 use crate::support::consts::{EVENT_FOLLOWUP, EVENT_SEARCH, TURN_TIMEOUT_SECS};
 use crate::support::error::{refusal, AppError, AppResult};
-use crate::thread::ledger::Ledger;
-use crate::thread::sweep;
+use crate::support::log::{lg, lr, ly};
+use crate::thread::ledger::{Ledger, Session};
+use crate::thread::{memory, sweep};
+
+const MAX_ROTATION: usize = 3;
+const COOLDOWN_SECS: u64 = 120;
 
 pub struct Bridge {
     pub settings: Setup,
@@ -46,12 +50,93 @@ pub async fn answer(
     request: &Request,
     sink: Option<UnboundedSender<String>>,
 ) -> AppResult<Reply> {
-    let choice = bridge.guard.acquire()?;
-    let api = bridge.api_for(choice.index)?;
-    let session = bridge.ledger.resolve(choice.index, &api).await?;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let choice = bridge.guard.acquire()?;
+        let api = bridge.api_for(choice.index)?;
+
+        let session = match bridge.ledger.resolve(choice.index, &api).await {
+            Ok(session) => session,
+            Err(err) => {
+                bridge.guard.blip(choice.slot, COOLDOWN_SECS);
+                if attempt < MAX_ROTATION {
+                    lr(&format!(
+                        "Account {} could not be refreshed, moving on: {}",
+                        choice.slot + 1,
+                        err
+                    ));
+                    continue;
+                }
+                return Err(err);
+            }
+        };
+
+        let mut label = session.label.clone();
+        let mut left = 0;
+        if let Ok(profile) = profile::fetch(&api, &session.access).await {
+            label = profile.label();
+            if profile.hermes.is_empty() {
+                bridge.guard.mark_exhausted(choice.slot, &profile.hermes);
+                if attempt < MAX_ROTATION {
+                    ly(&format!(
+                        "Account {} ({}) has spent its plan limit, rotating",
+                        choice.slot + 1,
+                        label
+                    ));
+                    continue;
+                }
+                return Err(AppError::quota(
+                    "every account has used up its plan limit, stopping",
+                ));
+            }
+            left = profile.hermes.remaining;
+            bridge.guard.mark_live(choice.slot);
+        }
+
+        match turn(bridge, request, &choice, &session, &api, sink.clone()).await {
+            Ok((reply, purged, cleared)) => {
+                lg(&format!(
+                    "Account {} ({}) answered, {} turn(s) left, {} thread(s) swept, memory {}",
+                    choice.slot + 1,
+                    label,
+                    left,
+                    purged,
+                    if cleared { "cleared" } else { "kept" }
+                ));
+                if let Ok(profile) = profile::fetch(&api, &session.access).await {
+                    bridge.guard.mark_exhausted(choice.slot, &profile.hermes);
+                }
+                return Ok(Reply { text: reply, purged });
+            }
+            Err(err) => {
+                bridge.guard.blip(choice.slot, COOLDOWN_SECS);
+                if attempt < MAX_ROTATION {
+                    lr(&format!(
+                        "Account {} ({}) refused the turn, rotating: {}",
+                        choice.slot + 1,
+                        label,
+                        err
+                    ));
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
+async fn turn(
+    bridge: &Bridge,
+    request: &Request,
+    choice: &crate::quota::guard::Choice,
+    session: &Session,
+    api: &Api,
+    sink: Option<UnboundedSender<String>>,
+) -> AppResult<(String, usize, bool)> {
     let vault = bridge.vault_for(choice.index);
     let pow_session = vault
-        .session(&api, &session.access, &session.user_uuid)
+        .session(api, &session.access, &session.user_uuid)
         .await?;
 
     let query = compose(request);
@@ -108,16 +193,13 @@ pub async fn answer(
 
     vault.spend();
 
-    let purged = sweep::purge_quiet(&api, &session.access, &session.user_uuid)
+    let purged = sweep::purge_quiet(api, &session.access, &session.user_uuid)
         .await
         .unwrap_or(0);
+    let cleared = memory::purge_quiet(api, &session.access).await.unwrap_or(false);
     let _ = socket.close(None).await;
 
-    if let Ok(profile) = profile::fetch(&api, &session.access).await {
-        bridge.guard.mark_exhausted(choice.slot, &profile.hermes);
-    }
-
-    Ok(Reply { text, purged })
+    Ok((text, purged, cleared))
 }
 
 struct Query {

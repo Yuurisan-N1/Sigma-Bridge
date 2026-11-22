@@ -47,10 +47,14 @@ pub async fn run(root: &Path) -> AppResult<()> {
     ly(&format!("Probing {} refresh token(s)", ledger.len()));
     for index in 0..ledger.len() {
         let session = ledger.resolve(index, &api).await?;
+        let label = match quota::profile::fetch(&api, &session.access).await {
+            Ok(profile) => format!("{} ({})", profile.label(), profile.plan),
+            Err(_) => session.label.clone(),
+        };
         lg(&format!(
-            "Account {}: user {} valid for {} seconds",
+            "Account {}: {} valid for {} seconds",
             index + 1,
-            mask_uuid(&session.user_uuid),
+            label,
             session.expires_at - thread::ledger::now_unix()
         ));
     }
@@ -95,6 +99,11 @@ pub async fn token_probe(access: &str) -> AppResult<()> {
 
     let profile = quota::profile::fetch(&api, access).await?;
     lg(&format!(
+        "The account reads {} on the {} plan",
+        profile.label(),
+        profile.plan
+    ));
+    lg(&format!(
         "The plan is {} and hermes stands at {}/{}",
         profile.plan,
         profile.hermes.current,
@@ -105,6 +114,12 @@ pub async fn token_probe(access: &str) -> AppResult<()> {
         .await
         .unwrap_or(0);
     lg(&format!("The thread shelf was swept, {} removed", swept));
+
+    let cleared = thread::memory::purge_quiet(&api, access).await.unwrap_or(false);
+    lg(&format!(
+        "The memory card was {}",
+        if cleared { "cleared" } else { "kept" }
+    ));
 
     gap();
     Ok(())
@@ -160,6 +175,12 @@ pub async fn token_chat(access: &str, text: &str) -> AppResult<()> {
         .await
         .unwrap_or(0);
     lr(&format!("The thread shelf was swept, {} removed", swept));
+
+    let cleared = thread::memory::purge_quiet(&api, access).await.unwrap_or(false);
+    lr(&format!(
+        "The memory card was {}",
+        if cleared { "cleared" } else { "kept" }
+    ));
     gap();
     Ok(())
 }

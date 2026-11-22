@@ -191,10 +191,10 @@ Press `Ctrl+C` once to stop the bridge cleanly when running in foreground.
 
 ```bash
 # Linux / macOS / Termux
-./target/release/sigmabridge
+./target/release/sigmabridge-bot
 
 # Windows
-.\target\release\sigmabridge.exe
+.\target\release\sigmabridge-bot.exe
 ```
 
 ---

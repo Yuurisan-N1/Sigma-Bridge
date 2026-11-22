@@ -28,6 +28,8 @@ impl Meter {
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub user_id: String,
+    pub email: String,
+    pub username: String,
     pub plan: String,
     pub hermes: Meter,
     pub meters: Vec<Meter>,
@@ -36,6 +38,16 @@ pub struct Profile {
 impl Profile {
     pub fn has_room(&self) -> bool {
         !self.hermes.is_empty()
+    }
+
+    pub fn label(&self) -> String {
+        if !self.email.trim().is_empty() {
+            return self.email.clone();
+        }
+        if !self.username.trim().is_empty() {
+            return self.username.clone();
+        }
+        crate::support::log::mask_uuid(&self.user_id)
     }
 }
 
@@ -54,6 +66,19 @@ impl Profile {
         if user_id.is_empty() {
             return Err(AppError::api("the profile carried no user id"));
         }
+
+        let email = value
+            .get("email")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let username = value
+            .get("username")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
 
         let plan = value
             .get("subscription")
@@ -87,6 +112,8 @@ impl Profile {
 
         Ok(Profile {
             user_id,
+            email,
+            username,
             plan,
             hermes,
             meters,

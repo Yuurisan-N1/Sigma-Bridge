@@ -13,17 +13,22 @@ use crate::support::error::{AppError, AppResult};
 
 const REFRESH_SAFETY_SECS: i64 = 120;
 
+const IDENTITY_KEYS: [&str; 5] = ["email", "username", "name", "preferred_username", "nickname"];
+
 #[derive(Debug, Clone)]
 pub struct Session {
     pub access: String,
     pub refresh: String,
     pub user_uuid: String,
     pub expires_at: i64,
+    pub label: String,
 }
 
 impl Session {
     pub fn is_fresh(&self, now: i64) -> bool {
-        self.expires_at.saturating_sub(REFRESH_SAFETY_SECS) > now
+        self.expires_at
+            .saturating_sub(crate::support::consts::SESSION_EARLY_SECS)
+            > now
     }
 }
 
@@ -65,6 +70,7 @@ impl Ledger {
         let user_uuid =
             jwt_user(access).ok_or_else(|| AppError::api("the access token carried no user id"))?;
         let expires_at = jwt_expiry(access).unwrap_or_else(|| now_unix() + 3600);
+        let label = jwt_label(access).unwrap_or_else(|| crate::support::log::mask_uuid(&user_uuid));
         let mut cache = HashMap::new();
         cache.insert(
             0,
@@ -73,6 +79,7 @@ impl Ledger {
                 refresh: String::new(),
                 user_uuid,
                 expires_at,
+                label,
             },
         );
         Ok(Ledger {
@@ -146,12 +153,14 @@ impl Ledger {
         let user_uuid = jwt_user(&access)
             .ok_or_else(|| AppError::api("the access token carried no user id"))?;
         let expires_at = jwt_expiry(&access).unwrap_or_else(|| now_unix() + 3600);
+        let label = jwt_label(&access).unwrap_or_else(|| crate::support::log::mask_uuid(&user_uuid));
 
         Ok(Session {
             access,
             refresh: next,
             user_uuid,
             expires_at,
+            label,
         })
     }
 
@@ -248,6 +257,19 @@ pub fn jwt_user(token: &str) -> Option<String> {
     None
 }
 
+pub fn jwt_label(token: &str) -> Option<String> {
+    let claims = jwt_claims(token)?;
+    for key in IDENTITY_KEYS {
+        if let Some(found) = claims.get(key).and_then(|v| v.as_str()) {
+            let found = found.trim();
+            if !found.is_empty() {
+                return Some(found.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn jwt_expiry(token: &str) -> Option<i64> {
     jwt_claims(token)?.get("exp")?.as_i64()
 }
@@ -306,6 +328,7 @@ mod tests {
             refresh: "r".into(),
             user_uuid: "u".into(),
             expires_at: 1000,
+            label: "u****u".into(),
         };
         assert!(!session.is_fresh(1000));
         assert!(!session.is_fresh(900));
@@ -318,9 +341,12 @@ mod tests {
             refresh: "r".into(),
             user_uuid: "u".into(),
             expires_at: 10_000,
+            label: "u****u".into(),
         };
         assert!(session.is_fresh(5_000));
         assert!(!session.is_fresh(9_950));
+        // menit-menit terakhir sebelum kedaluwarsa sudah masuk window refresh dini
+        assert!(!session.is_fresh(9_600));
     }
 
     #[test]

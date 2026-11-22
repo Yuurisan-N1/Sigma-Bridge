@@ -49,7 +49,15 @@ pub struct Guard {
     settings: Settings,
     accounts: usize,
     exhausted: Mutex<Vec<bool>>,
+    cooldown: Mutex<Vec<i64>>,
     state: Mutex<State>,
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|span| span.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl Guard {
@@ -63,6 +71,7 @@ impl Guard {
             settings,
             accounts,
             exhausted: Mutex::new(vec![false; accounts]),
+            cooldown: Mutex::new(vec![0; accounts]),
             state: Mutex::new(State {
                 cursor: 0,
                 used: 0,
@@ -103,7 +112,11 @@ impl Guard {
         }
 
         if self.settings.mode() == Mode::Sticky {
-            if let Some(index) = spent.iter().position(|done| !*done) {
+            if let Some((index, _)) = spent
+                .iter()
+                .enumerate()
+                .find(|(index, done)| !**done && self.ready(*index))
+            {
                 state.cursor = index;
                 state.used = 1;
                 state.current = index;
@@ -114,6 +127,7 @@ impl Guard {
         if state.used < self.settings.sticky
             && state.current < self.accounts
             && !spent[state.current]
+            && self.ready(state.current)
         {
             state.used += 1;
             return Ok(Choice {
@@ -127,11 +141,23 @@ impl Guard {
         } else {
             state.cursor % self.accounts
         };
+        let mut cooling: Option<usize> = None;
         for step in 0..self.accounts {
             let index = (start + step) % self.accounts;
             if spent[index] {
                 continue;
             }
+            if !self.ready(index) {
+                cooling.get_or_insert(index);
+                continue;
+            }
+            state.cursor = (index + 1) % self.accounts;
+            state.used = 1;
+            state.current = index;
+            return Ok(Choice { index, slot: index });
+        }
+
+        if let Some(index) = cooling {
             state.cursor = (index + 1) % self.accounts;
             state.used = 1;
             state.current = index;
@@ -152,6 +178,45 @@ impl Guard {
                 spent[slot] = true;
             }
         }
+    }
+
+    pub fn blip(&self, slot: usize, seconds: u64) {
+        if slot >= self.accounts {
+            return;
+        }
+        let until = now_unix() + seconds as i64;
+        if let Ok(mut cooldown) = self.cooldown.lock() {
+            cooldown[slot] = until;
+        }
+    }
+
+    pub fn ready(&self, slot: usize) -> bool {
+        if slot >= self.accounts {
+            return false;
+        }
+        match self.cooldown.lock() {
+            Ok(cooldown) => cooldown[slot] <= now_unix(),
+            Err(_) => true,
+        }
+    }
+
+    pub fn mark_live(&self, slot: usize) {
+        if slot >= self.accounts {
+            return;
+        }
+        if let Ok(mut spent) = self.exhausted.lock() {
+            spent[slot] = false;
+        }
+    }
+
+    pub fn is_spent(&self, slot: usize) -> bool {
+        if slot >= self.accounts {
+            return true;
+        }
+        self.exhausted
+            .lock()
+            .map(|spent| spent[slot])
+            .unwrap_or(true)
     }
 
     pub fn retire(&self, slot: usize) {

@@ -66,6 +66,10 @@ impl Api {
         self.call(Method::POST, path, token, None).await
     }
 
+    pub async fn delete(&self, path: &str, token: &str, body: Value) -> AppResult<Value> {
+        self.call(Method::DELETE, path, token, Some(body)).await
+    }
+
     pub async fn call(
         &self,
         method: Method,
