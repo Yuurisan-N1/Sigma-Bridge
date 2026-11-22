@@ -13,17 +13,17 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: sigmabridge-linux-x86_64
-            binary: target/release/sigmabridge
+            binary: target/release/sigmabridge-bot
             target: ""
 
           - os: windows-latest
             artifact: sigmabridge-windows-x86_64
-            binary: target/release/sigmabridge.exe
+            binary: target/release/sigmabridge-bot.exe
             target: ""
 
           - os: macos-latest
             artifact: sigmabridge-macos-aarch64
-            binary: target/release/sigmabridge
+            binary: target/release/sigmabridge-bot
             target: ""
 
     steps:
@@ -47,3 +47,4 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
+          if-no-files-found: error
